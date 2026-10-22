@@ -1,14 +1,6 @@
 name: peridot-boot
 on:
   workflow_dispatch:
-  push:
-    branches: [ peridot ]
-    paths:
-      - 'common/devices/peridot.conf'
-      - 'xnuloader/**'
-      - 'uefi/**'
-      - 'mkxnuimg.py'
-      - '.github/workflows/peridot-boot.yml'
 
 permissions:
   contents: read
@@ -16,18 +8,56 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
         with:
           repository: hoshikv/hackios-xnu-kernel
           ref: peridot
 
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache /usr/share/swift /usr/local/.ghcup \
+            /usr/local/share/powershell /usr/local/lib/node_modules \
+            /usr/local/share/chromium /usr/local/share/edge /usr/share/az_* \
+            /usr/local/share/boost
+          sudo apt-get clean
+          docker system prune -af || true
+          df -h /
+
       - name: Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential git curl clang lld nasm \
-            gcc-aarch64-linux-gnu llvm python3 python3-pip python3-venv uuid-dev
+            gcc-aarch64-linux-gnu llvm python3 python3-pip python3-venv uuid-dev \
+            libtinfo6 flex bison m4 autoconf automake xz-utils libxml2-dev
+
+      - name: Theos cctools + iOS 16.5 SDK
+        run: |
+          export THEOS=$HOME/theos
+          mkdir -p $THEOS/toolchain $THEOS/sdks
+          curl -sL https://github.com/L1ghtmann/llvm-project/releases/latest/download/iOSToolchain-x86_64.tar.xz \
+            | tar -xJ -C $THEOS/toolchain
+          url=$(curl -s https://api.github.com/repos/theos/sdks/releases/latest \
+            | jq -r '.assets[] | select(.name=="iPhoneOS16.5.sdk.tar.xz") | .browser_download_url')
+          test -n "$url"
+          curl -sL "$url" | tar -xJ -C $THEOS/sdks
+          test -x $THEOS/toolchain/linux/iphone/bin/ld
+          test -d $THEOS/sdks/iPhoneOS16.5.sdk/usr/include
+          echo "THEOS=$THEOS" >> $GITHUB_ENV
+
+      - name: Build kernel
+        run: |
+          mkdir -p out
+          ./xnu/apply.sh
+          ./xnu-deps/setup.sh
+          touch out/.kernel-start
+          ./xnu-build.sh -j"$(nproc)" -k > out/kernel-build.log 2>&1 || true
+          K=xnu-src/xnu-8796.121.2/BUILD/obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837
+          { [ -f $K ] && { [ $K -nt out/.kernel-start ] || ! grep -q "error:" out/kernel-build.log; }; } \
+            || { tail -100 out/kernel-build.log; exit 1; }
+          stat -c 'kernel: %s bytes' $K
 
       - name: Mu-Silicium + peridot port
         run: ./uefi/apply.sh
@@ -64,9 +94,12 @@ jobs:
           python3 mkxnuimg.py -p out/usb-payload.bin -o out/peridot-boot.img
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: peridot-boot
           path: |
             out/peridot-boot.img
+            out/kernel-build.log
             xnuloader/loader.efi
+            xnu-src/xnu-8796.121.2/BUILD/obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837
             Mu-Silicium/Build/peridotPkg/RELEASE_CLANGPDB/FV/SILICIUM_UEFI.fd
