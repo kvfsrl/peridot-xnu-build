@@ -1,0 +1,59 @@
+name: peridot-userland
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: hoshikv/hackios-xnu-kernel
+          ref: peridot
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo apt-get clean
+          df -h /
+
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y 7zip gcc python3
+          sudo ln -sf /usr/bin/7zz /usr/local/bin/7z
+          7z i | grep -i apfs || { echo "7z has no APFS support"; exit 1; }
+
+      - name: Userland checkout
+        env:
+          USERLAND_URL: https://github.com/hoshikv/hackios-xnu-userland.git
+          USERLAND_REF: peridot
+        run: ./common/setup.sh
+
+      - name: Fetch iOS 16.5
+        run: ./ios165/fetch.sh
+
+      - name: Build APFS images
+        run: PREBUILT=1 REST=1 ./userland/build.sh
+
+      - name: Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: peridot-userland
+          path: |
+            userland/root.apfs
+            userland/system.apfs
+
+      - name: Logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: peridot-userland-logs
+          path: |
+            ios165/*.log
+            userland/*.log
