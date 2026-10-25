@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: hoshikv/hackios-xnu-kernel
-          ref: peridot
+          ref: main
 
       - name: Free disk space
         run: |
@@ -31,15 +31,21 @@ jobs:
 
       - name: Userland checkout
         env:
-          USERLAND_URL: https://github.com/hoshikv/hackios-xnu-userland.git
-          USERLAND_REF: peridot
+          USERLAND_URL: https://github.com/oosexgang/hackios-xnu-userland.git
+          USERLAND_REF: metal
         run: ./common/setup.sh
 
       - name: Fetch iOS 16.5
         run: ./ios165/fetch.sh
 
       - name: Build APFS images
-        run: PREBUILT=1 REST=1 ./userland/build.sh
+        env:
+          WIFI_BDF: n16t
+        run: |
+          P=common/patches/userland-peridot-firmware.patch
+          git apply "$P"
+          trap 'git apply --reverse "$P"' EXIT
+          PREBUILT=1 REST=1 WIFI_BDF="$WIFI_BDF" ./userland/build.sh
 
       - name: Artifact
         uses: actions/upload-artifact@v4
