@@ -18,16 +18,38 @@ jobs:
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+            /opt/hostedtoolcache /usr/share/swift /usr/local/.ghcup \
+            /usr/local/share/powershell /usr/local/lib/node_modules \
+            /usr/local/share/chromium /usr/local/share/edge /usr/share/az_* \
+            /usr/local/share/boost
           sudo apt-get clean
           df -h /
 
       - name: Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y 7zip gcc python3
+          sudo apt-get install -y 7zip build-essential git curl clang lld llvm nasm \
+            gcc-aarch64-linux-gnu python3 python3-pip python3-venv uuid-dev \
+            libtinfo6 flex bison m4 autoconf automake xz-utils libxml2-dev jq
           sudo ln -sf /usr/bin/7zz /usr/local/bin/7z
           7z i | grep -i apfs || { echo "7z has no APFS support"; exit 1; }
+
+      - name: Theos cctools + iOS 16.5 SDK
+        run: |
+          export THEOS=$HOME/theos
+          mkdir -p $THEOS/toolchain $THEOS/sdks
+          curl -sL https://github.com/L1ghtmann/llvm-project/releases/latest/download/iOSToolchain-x86_64.tar.xz \
+            | tar -xJ -C $THEOS/toolchain
+          url=$(curl -s https://api.github.com/repos/theos/sdks/releases/latest \
+            | jq -r '.assets[] | select(.name=="iPhoneOS16.5.sdk.tar.xz") | .browser_download_url')
+          test -n "$url"
+          curl -sL "$url" | tar -xJ -C $THEOS/sdks
+          test -x $THEOS/toolchain/linux/iphone/bin/ld
+          test -d $THEOS/sdks/iPhoneOS16.5.sdk/usr/include
+          echo "THEOS=$THEOS" >> $GITHUB_ENV
+
+      - name: Kernel host tools
+        run: ./xnu-deps/setup.sh --stage1
 
       - name: Userland checkout
         env:
@@ -45,7 +67,7 @@ jobs:
           P=common/patches/userland-peridot-firmware.patch
           git apply "$P"
           trap 'git apply --reverse "$P"' EXIT
-          PREBUILT=1 REST=1 WIFI_BDF="$WIFI_BDF" ./userland/build.sh
+          GL=1 REST=1 WIFI_BDF="$WIFI_BDF" ./userland/build.sh
 
       - name: Artifact
         uses: actions/upload-artifact@v4
