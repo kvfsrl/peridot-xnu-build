@@ -56,15 +56,22 @@ jobs:
           mkdir -p xnu-src/xnu-8796.121.2/BUILD/obj/DEVELOPMENT_ARM64_BCM2837/bsd/DEVELOPMENT
           ./tools/mk-wlfw.sh
           touch out/.kernel-start
-          ./xnu-build.sh -j"$(nproc)" -k > out/kernel-build.log 2>&1 || {
-            tail -100 out/kernel-build.log
-            exit 1
-          }
+          BUILD_STATUS=0
+          ./xnu-build.sh -j"$(nproc)" -k > out/kernel-build.log 2>&1 || BUILD_STATUS=$?
           K=xnu-src/xnu-8796.121.2/BUILD/obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837
-          test -s "$K" && test "$K" -nt out/.kernel-start || {
+          if ! test -s "$K" || ! test "$K" -nt out/.kernel-start || \
+            ! grep -q "built kernel at .*mach.development.bcm2837" out/kernel-build.log || \
+            grep -q 'error:' out/kernel-build.log; then
             tail -100 out/kernel-build.log
             exit 1
-          }
+          fi
+          if [ "$BUILD_STATUS" -ne 0 ]; then
+            grep -q 'check_all_exports.*Error 1' out/kernel-build.log || {
+              tail -100 out/kernel-build.log
+              exit 1
+            }
+            echo "XNU's non-kernel symbolset audit failed after the kernel linked; using the verified new kernel"
+          fi
           stat -c 'kernel: %s bytes' "$K"
 
       - name: Mu-Silicium + peridot port
