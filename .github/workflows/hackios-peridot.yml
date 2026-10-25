@@ -53,14 +53,19 @@ jobs:
           ./xnu/apply.sh
           ./xnu-deps/setup.sh
           ./tools/mk-ath11k.sh
-          touch out/.kernel-start
-          ./xnu-build.sh -j"$(nproc)" -k > out/kernel-build.log 2>&1 || true
+          mkdir -p xnu-src/xnu-8796.121.2/BUILD/obj/DEVELOPMENT_ARM64_BCM2837/bsd/DEVELOPMENT
           ./tools/mk-wlfw.sh
-          ./xnu-build.sh -j"$(nproc)" -k >> out/kernel-build.log 2>&1 || true
+          touch out/.kernel-start
+          ./xnu-build.sh -j"$(nproc)" -k > out/kernel-build.log 2>&1 || {
+            tail -100 out/kernel-build.log
+            exit 1
+          }
           K=xnu-src/xnu-8796.121.2/BUILD/obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837
-          { [ -f $K ] && { [ $K -nt out/.kernel-start ] || ! grep -q "error:" out/kernel-build.log; }; } \
-            || { tail -100 out/kernel-build.log; exit 1; }
-          stat -c 'kernel: %s bytes' $K
+          test -s "$K" && test "$K" -nt out/.kernel-start || {
+            tail -100 out/kernel-build.log
+            exit 1
+          }
+          stat -c 'kernel: %s bytes' "$K"
 
       - name: Mu-Silicium + peridot port
         run: ./uefi/apply.sh
