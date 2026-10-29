@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          repository: hoshikv/hackios-xnu-kernel
+          repository: hoshikv/xnu-kernel-peridot
           ref: main
 
       - name: Free disk space
@@ -74,6 +74,16 @@ jobs:
           fi
           stat -c 'kernel: %s bytes' "$K"
 
+      - name: Build Metal probe
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          printf '#!/bin/sh\nexec llvm-ar "$@"\n' > "$RUNNER_TEMP/bin/ar"
+          chmod +x "$RUNNER_TEMP/bin/ar"
+          export PATH="$RUNNER_TEMP/bin:$PATH"
+          export IOS_CXX="xnu-clang++ -arch arm64 -isysroot $THEOS/sdks/iPhoneOS16.5.sdk -miphoneos-version-min=16.0"
+          make -C metal test
+          ./metal/build.sh
+
       - name: Mu-Silicium + peridot port
         run: ./uefi/apply.sh
 
@@ -117,4 +127,6 @@ jobs:
             out/kernel-build.log
             xnuloader/loader.efi
             xnu-src/xnu-8796.121.2/BUILD/obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837
+            metal/out/ios/hakios-metal-probe
+            metal/out/ios/libhakios-metal.a
             Mu-Silicium/Build/peridotPkg/RELEASE_CLANGPDB/FV/SILICIUM_UEFI.fd
