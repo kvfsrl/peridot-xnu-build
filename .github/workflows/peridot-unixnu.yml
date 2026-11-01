@@ -30,6 +30,10 @@ on:
         description: Mu-Silicium commit for the UEFI firmware
         required: true
         default: e51cd877e31c8fbb322032dc4cb6715e83d25ad3
+      prelink:
+        description: Prelink against the OS kernelcache (required for source storage and UFS)
+        type: boolean
+        default: false
   push:
     branches: [main]
 
@@ -50,6 +54,7 @@ env:
   TARGET: ${{ inputs.target || 'RELEASE' }}
   XCODE_VERSION: ${{ inputs.xcode || '26.6' }}
   MU_SILICIUM_REF: ${{ inputs.mu_silicium_ref || 'e51cd877e31c8fbb322032dc4cb6715e83d25ad3' }}
+  PRELINK: ${{ inputs.prelink || 'false' }}
 
 defaults:
   run:
@@ -126,8 +131,10 @@ jobs:
         run: |
           mkdir -p "$GITHUB_WORKSPACE/logs"
           set -o pipefail
+          PRELINK_FLAG="--skip-prelink"
+          if [ "$PRELINK" = "true" ]; then PRELINK_FLAG=""; fi
           ./unixnu build kernel firmware payload \
-            --skip-prelink \
+            $PRELINK_FLAG \
             --uefi "$UNIXNU_UEFI" \
             --edk2 "$UNIXNU_EDK2" \
             --target "$TARGET" 2>&1 | tee "$GITHUB_WORKSPACE/logs/build.log"
