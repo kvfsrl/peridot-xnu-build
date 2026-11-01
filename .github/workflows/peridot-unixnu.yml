@@ -1,0 +1,184 @@
+name: peridot-unixnu
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_repository:
+        description: UniXNU core + peridot device repository
+        required: true
+        default: hoshikv/UniXNU-peridot
+      source_ref:
+        description: Branch, tag, or commit to build
+        required: true
+        default: main
+      defconfig:
+        description: Device defconfig
+        required: true
+        default: peridot_defconfig
+      target:
+        description: EDK II target
+        type: choice
+        options:
+          - RELEASE
+          - DEBUG
+        default: RELEASE
+      xcode:
+        description: Xcode version on the macOS runner
+        required: true
+        default: "26.6"
+      mu_silicium_ref:
+        description: Mu-Silicium commit for the UEFI firmware
+        required: true
+        default: e51cd877e31c8fbb322032dc4cb6715e83d25ad3
+  push:
+    branches: [main]
+
+concurrency:
+  group: peridot-unixnu-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: 1
+  HOMEBREW_NO_INSTALL_CLEANUP: 1
+  HOMEBREW_NO_ENV_HINTS: 1
+  SOURCE_REPOSITORY: ${{ inputs.source_repository || 'hoshikv/UniXNU-peridot' }}
+  SOURCE_REF: ${{ inputs.source_ref || 'main' }}
+  DEFCONFIG: ${{ inputs.defconfig || 'peridot_defconfig' }}
+  TARGET: ${{ inputs.target || 'RELEASE' }}
+  XCODE_VERSION: ${{ inputs.xcode || '26.6' }}
+  MU_SILICIUM_REF: ${{ inputs.mu_silicium_ref || 'e51cd877e31c8fbb322032dc4cb6715e83d25ad3' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 360
+
+    steps:
+      - name: Check out UniXNU
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ env.SOURCE_REF }}
+          path: source
+          persist-credentials: false
+
+      - name: Check out Mu-Silicium
+        uses: actions/checkout@v4
+        with:
+          repository: Project-Silicium/Mu-Silicium
+          ref: ${{ env.MU_SILICIUM_REF }}
+          path: Mu-Silicium
+          submodules: recursive
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Select Xcode and check inputs
+        env:
+          DEVELOPER_DIR: /Applications/Xcode_${{ env.XCODE_VERSION }}.app/Contents/Developer
+        run: |
+          sw_vers
+          uname -m
+          test -d "$DEVELOPER_DIR" || { echo "missing Xcode: $DEVELOPER_DIR"; ls -d /Applications/Xcode*.app; exit 1; }
+          sudo xcode-select -s "$DEVELOPER_DIR"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          test -f source/board.toml
+          test -f "source/configs/$DEFCONFIG"
+          test -f Mu-Silicium/Resources/Configs/peridot.toml
+          test -f Mu-Silicium/Mu_Basecore/BaseTools/Source/C/Makefile
+          df -h "$GITHUB_WORKSPACE"
+
+      - name: Install host tools
+        run: |
+          brew install llvm lld mtools dtc nasm acpica unifdef jq
+          for tool in clang make cmake ninja unifdef ld.lld mformat mcopy dtc iasl nasm; do
+            command -v "$tool" >/dev/null || { echo "missing $tool"; exit 1; }
+          done
+          "$(brew --prefix llvm)/bin/clang" --version | head -1
+
+      - name: Prepare the device tree
+        working-directory: source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          UNIXNU_UEFI: ${{ github.workspace }}/Mu-Silicium
+        run: |
+          ./unixnu defconfig "$DEFCONFIG" -D .
+          ./unixnu fetch
+          ./unixnu status --json | tee "$RUNNER_TEMP/status.json"
+          ./unixnu status
+
+      - name: Build kernel and firmware
+        working-directory: source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          UNIXNU_UEFI: ${{ github.workspace }}/Mu-Silicium
+          UNIXNU_EDK2: ${{ github.workspace }}/Mu-Silicium/Mu_Basecore
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          set -o pipefail
+          ./unixnu build kernel firmware \
+            --uefi "$UNIXNU_UEFI" \
+            --edk2 "$UNIXNU_EDK2" \
+            --target "$TARGET" 2>&1 | tee "$GITHUB_WORKSPACE/logs/build.log"
+
+      - name: Collect artifacts
+        if: success()
+        run: |
+          OUT=$(jq -r .output "$RUNNER_TEMP/status.json")
+          FW_FD="$GITHUB_WORKSPACE/Mu-Silicium/Build/peridotPkg/${TARGET}_CLANGPDB/FV/SILICIUM_UEFI.fd"
+          mkdir -p dist
+          cp "$OUT/kernel/kernel.macho" dist/
+          if [ -f "$OUT/kernel/kernel.macho.adt" ]; then cp "$OUT/kernel/kernel.macho.adt" dist/; fi
+          if [ -f "$OUT/kernel/kernel.macho.map" ]; then cp "$OUT/kernel/kernel.macho.map" dist/; fi
+          cp "$FW_FD" dist/SILICIUM_UEFI.fd
+          cp "$GITHUB_WORKSPACE/logs/build.log" dist/build.log
+          cp "$RUNNER_TEMP/status.json" dist/status.json
+          if [ -d "$OUT/logs" ]; then cp -R "$OUT/logs" dist/tree-logs; fi
+          (cd dist && find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 shasum -a 256 > SHA256SUMS)
+          ls -lh dist
+
+      - name: Upload build artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: peridot-unixnu
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Collect failure logs
+        if: failure()
+        run: |
+          mkdir -p dist-failure
+          cp "$GITHUB_WORKSPACE/logs/build.log" dist-failure/ 2>/dev/null || true
+          cp "$RUNNER_TEMP/status.json" dist-failure/ 2>/dev/null || true
+          if [ -f source/out/state.json ]; then cp source/out/state.json dist-failure/; fi
+          find source/out -type f -name '*.log' -print 2>/dev/null | while read -r log; do
+            rel=${log#source/}
+            mkdir -p "dist-failure/$(dirname "$rel")"
+            cp "$log" "dist-failure/$rel"
+          done
+          find Mu-Silicium/Build -type f -name '*.fd' -o -name '*.log' 2>/dev/null | head -20 | while read -r f; do
+            mkdir -p "dist-failure/firmware/$(dirname "${f#Mu-Silicium/}")"
+            cp "$f" "dist-failure/firmware/${f#Mu-Silicium/}"
+          done
+          ls -lhR dist-failure | head -60
+
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: peridot-unixnu-logs
+          path: dist-failure/
+          if-no-files-found: warn
+          retention-days: 14
