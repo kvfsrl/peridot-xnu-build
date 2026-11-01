@@ -146,7 +146,7 @@ jobs:
           ./unixnu bootimg \
             --uefi "$UNIXNU_UEFI" \
             --fd "$FW_FD" \
-            --dtb "$OUT/device-tree/hardware.dtb" \
+            --dtb "$UNIXNU_UEFI/Resources/DTBs/peridot.dtb" \
             -o "$OUT/boot/boot.img" 2>&1 | tee "$GITHUB_WORKSPACE/logs/bootimg.log"
 
       - name: Collect artifacts
