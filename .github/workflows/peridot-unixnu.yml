@@ -126,11 +126,28 @@ jobs:
         run: |
           mkdir -p "$GITHUB_WORKSPACE/logs"
           set -o pipefail
-          ./unixnu build kernel firmware \
+          ./unixnu build kernel firmware payload \
             --skip-prelink \
             --uefi "$UNIXNU_UEFI" \
             --edk2 "$UNIXNU_EDK2" \
             --target "$TARGET" 2>&1 | tee "$GITHUB_WORKSPACE/logs/build.log"
+
+      - name: Build boot image
+        if: success()
+        working-directory: source
+        env:
+          UNIXNU_UEFI: ${{ github.workspace }}/Mu-Silicium
+          UNIXNU_EDK2: ${{ github.workspace }}/Mu-Silicium/Mu_Basecore
+        run: |
+          set -o pipefail
+          mkdir -p "$GITHUB_WORKSPACE/logs"
+          OUT=$(jq -r .output "$RUNNER_TEMP/status.json")
+          FW_FD="$GITHUB_WORKSPACE/Mu-Silicium/Build/peridotPkg/${TARGET}_CLANGPDB/FV/SILICIUM_UEFI.fd"
+          ./unixnu bootimg \
+            --uefi "$UNIXNU_UEFI" \
+            --fd "$FW_FD" \
+            --dtb "$OUT/device-tree/hardware.dtb" \
+            -o "$OUT/boot/boot.img" 2>&1 | tee "$GITHUB_WORKSPACE/logs/bootimg.log"
 
       - name: Collect artifacts
         if: success()
@@ -138,6 +155,7 @@ jobs:
           OUT=$(jq -r .output "$RUNNER_TEMP/status.json")
           FW_FD="$GITHUB_WORKSPACE/Mu-Silicium/Build/peridotPkg/${TARGET}_CLANGPDB/FV/SILICIUM_UEFI.fd"
           mkdir -p dist
+          cp "$OUT/boot/boot.img" dist/
           cp "$OUT/kernel/kernel.macho" dist/
           if [ -f "$OUT/kernel/kernel.macho.adt" ]; then cp "$OUT/kernel/kernel.macho.adt" dist/; fi
           if [ -f "$OUT/kernel/kernel.macho.map" ]; then cp "$OUT/kernel/kernel.macho.map" dist/; fi
