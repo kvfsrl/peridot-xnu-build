@@ -127,6 +127,7 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/logs"
           set -o pipefail
           ./unixnu build kernel firmware \
+            --skip-prelink \
             --uefi "$UNIXNU_UEFI" \
             --edk2 "$UNIXNU_EDK2" \
             --target "$TARGET" 2>&1 | tee "$GITHUB_WORKSPACE/logs/build.log"
