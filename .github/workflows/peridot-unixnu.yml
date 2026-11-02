@@ -194,6 +194,12 @@ jobs:
             mkdir -p "dist-failure/$(dirname "$rel")"
             cp "$log" "dist-failure/$rel"
           done
+          KERNEL=$(find source/out -path '*DEVELOPMENT_ARM64_BCM2837*' -name 'mach.*.unstripped.noctf' -print -quit 2>/dev/null || true)
+          if [ -n "$KERNEL" ]; then
+            cp "$KERNEL" dist-failure/native-kernel
+            otool -l "$KERNEL" > dist-failure/native-segments.txt
+            nm -m "$KERNEL" 2>/dev/null | grep -E '_lastkerneldataconst(_padsize)?$' >> dist-failure/native-segments.txt || true
+          fi
           find Mu-Silicium/Build -type f -name '*.fd' -o -name '*.log' 2>/dev/null | head -20 | while read -r f; do
             mkdir -p "dist-failure/firmware/$(dirname "${f#Mu-Silicium/}")"
             cp "$f" "dist-failure/firmware/${f#Mu-Silicium/}"
